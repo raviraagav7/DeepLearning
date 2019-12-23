@@ -12,11 +12,24 @@ import time
 import os
 import argparse
 from tqdm import tqdm
-
+from enum import Enum
+from azureml.core import Run
 plt.ion()
+run = Run.get_context()
 
 
-class Train:
+class ModelArchitecture(Enum):
+    WIDE_RES_NET_50 = 'wide_res_net_50'
+    MOBILE_NET_V2 = 'mobile_net'
+    VGG_19 = 'vgg_19'
+    RES_NEXT = 'res_next'
+
+    @classmethod
+    def has_value(cls, value):
+        return value in cls._value2member_map_
+
+
+class Trainer:
 
     def __init__(self, data_dir, batch_size, model_architecture, learning_rate,
                  epochs, momentum, is_pretrained, output_dir, experiment='Ant_and_Bees'):
@@ -61,8 +74,10 @@ class Train:
 
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.__build_model()
+
         if not os.path.exists(self.output_dir):
-            os.mkdir(self.output_dir)
+            os.makedirs(self.output_dir)
+            print('Created Folder.')
 
     @staticmethod
     def im_show(inp, title=None):
@@ -84,21 +99,22 @@ class Train:
         plt.pause(10)
 
     def __build_model(self):
-        if self.model_architecture == 'wide_res_net_50':
+        if self.model_architecture == ModelArchitecture.WIDE_RES_NET_50.value:
             self.model = models.wide_resnet50_2(pretrained=self.is_pretrained)
             num_features = self.model.fc.in_features
             self.model.fc = nn.Linear(num_features, len(self.class_names))
 
-        elif self.model_architecture == 'res_next':
+        elif self.model_architecture == ModelArchitecture.RES_NEXT.value:
             self.model = models.resnext101_32x8d(pretrained=self.is_pretrained)
             num_features = self.model.fc.in_features
             self.model.fc = nn.Linear(num_features, len(self.class_names))
 
-        elif self.model_architecture == 'vgg19':
+        elif self.model_architecture == ModelArchitecture.VGG_19.value:
             self.model = models.vgg19_bn(pretrained=self.is_pretrained)
             num_features = self.model.classifier[6].in_features
             self.model.classifier[6] = nn.Linear(num_features, len(self.class_names))
-        else:
+
+        elif self.model_architecture == ModelArchitecture.MOBILE_NET_V2.value:
             self.model = models.mobilenet_v2(pretrained=self.is_pretrained)
             num_features = self.model.classifier[1].in_features
             self.model.classifier[1] = nn.Linear(num_features, len(self.class_names))
@@ -116,6 +132,10 @@ class Train:
         since = time.time()
 
         best_acc = 0.0
+        run.log('Batch Size', int(self.batch_size))
+        run.log('Model Architecture', str(self.model_architecture))
+        run.log('Learning Rate', float(self.learning_rate))
+        run.log('Momentum', float(self.momentum))
 
         for epoch in range(self.epochs):
 
@@ -165,6 +185,9 @@ class Train:
                 print('{} Loss: {:.4f} Acc: {:.4f}'.format(
                     phase, epoch_loss, epoch_acc))
 
+                run.log('{}_loss'.format(phase), float(epoch_loss))
+                run.log('{}_acc'.format(phase), float(epoch_acc))
+
                 if phase == 'train':
                     self.writer.add_scalar('training_loss', epoch_loss, epoch)
                     self.writer.add_scalar('training_acc', epoch_acc, epoch)
@@ -176,8 +199,10 @@ class Train:
                 if phase == 'val' and epoch_acc > best_acc:
                     best_acc = epoch_acc
                     torch.save(self.model.state_dict(), os.path.join(self.output_dir,
-                                                                     'best_weights_{}.pth'.format(
-                                                                         self.model_architecture)))
+                                                                     'best_weights_{}_batch_{}_lr_{}.pth'.format(
+                                                                         self.model_architecture,
+                                                                         self.batch_size, self.learning_rate)))
+                    print(os.listdir(self.output_dir))
 
         print()
 
@@ -188,7 +213,9 @@ class Train:
 
         # Model loaded with best weights.
         self.model.load_state_dict(torch.load(os.path.join(self.output_dir,
-                                                           'best_weights_{}.pth'.format(self.model_architecture))))
+                                                           'best_weights_{}_batch_{}_lr_{}.pth'.format(
+                                                               self.model_architecture, self.batch_size,
+                                                               self.learning_rate))))
 
     def visualize_model(self, num_images=6):
 
@@ -248,8 +275,10 @@ if __name__ == '__main__':
                         type=str, default='./model_weight', help='The directory where the weights needs to be saved')
 
     args = parser.parse_args()
-    o_train = Train(args.data_dir, args.batch_size, args.model_architecture,
-                    args.learning_rate, args.epochs, args.momentum, args.is_pretrained, args.output_dir)
+
+    assert ModelArchitecture.has_value(args.model_architecture), 'Please provide the right architecture.'
+    o_train = Trainer(args.data_dir, args.batch_size, args.model_architecture,
+                      args.learning_rate, args.epochs, args.momentum, args.is_pretrained, args.output_dir)
 
     # To display the image.
     # inputs, classes = next(iter(o_train.data_loader['train']))
@@ -257,5 +286,5 @@ if __name__ == '__main__':
     # o_train.im_show(out, title=[o_train.class_names[x] for x in classes])
 
     o_train.train_model()
-    o_train.visualize_model()
+    # o_train.visualize_model()
 
