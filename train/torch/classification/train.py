@@ -34,7 +34,7 @@ class Trainer:
     def __init__(self, data_dir, batch_size, model_architecture, learning_rate,
                  epochs, momentum, is_pretrained, output_dir, experiment='Ant_and_Bees'):
         """
-
+            To do
         """
         self.data_dir = data_dir
         self.batch_size = batch_size
@@ -99,6 +99,9 @@ class Trainer:
         plt.pause(10)
 
     def __build_model(self):
+        """
+           To do
+        """
         if self.model_architecture == ModelArchitecture.WIDE_RES_NET_50.value:
             self.model = models.wide_resnet50_2(pretrained=self.is_pretrained)
             num_features = self.model.fc.in_features
@@ -129,6 +132,9 @@ class Trainer:
         self.exp_lr_scheduler = lr_scheduler.StepLR(self.optimizer, step_size=7, gamma=0.1)
 
     def train_model(self):
+        """
+            To do
+        """
         since = time.time()
 
         best_acc = 0.0
@@ -218,7 +224,9 @@ class Trainer:
                                                                self.learning_rate))))
 
     def visualize_model(self, num_images=6):
-
+        """
+            To do
+        """
         was_training = self.model.training
         self.model.eval()
         images_so_far = 0
