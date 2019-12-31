@@ -41,6 +41,7 @@ class Trainer:
         self.start_epoch = start_epoch
         self.is_pretrained = is_pretrained
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        print(self.is_pretrained)
         self.num_classes = num_classes
         if self.output_dir:
             utils.mkdir(self.output_dir)
@@ -101,8 +102,13 @@ class Trainer:
         print("Loading data")
 
         # use our dataset and defined transformations
-        dataset = PedData('/Users/srinivasraviraagav/Downloads/PennFudanPed', self.__get_transform(train=True))
-        dataset_test = PedData('/Users/srinivasraviraagav/Downloads/PennFudanPed', self.__get_transform(train=False))
+        dataset = PedData(self.data_dir, self.__get_transform(train=True))
+        dataset_test = PedData(self.data_dir, self.__get_transform(train=False))
+
+        # split the dataset in train and test set
+        indices = torch.randperm(len(dataset)).tolist()
+        dataset = torch.utils.data.Subset(dataset, indices[:-50])
+        dataset_test = torch.utils.data.Subset(dataset_test, indices[-50:])
 
         print("Creating data loaders")
         train_sampler = torch.utils.data.RandomSampler(dataset)
@@ -138,7 +144,7 @@ class Trainer:
             train_one_epoch(model, optimizer, data_loader, self.device, epoch, args.print_freq)
 
             lr_scheduler.step()
-            if self.output_dir:
+            if self.output_dir and epoch == self.epochs-1:
                 utils.save_on_master({
                     'model': model.state_dict(),
                     'optimizer': optimizer.state_dict(),
@@ -157,7 +163,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Train a detector network.')
 
-    parser.add_argument('--data_path', default='/datasets01/COCO/022719/', help='dataset')
+    parser.add_argument('--data_path', default='/home/ravi/Downloads/PennFudanPed', help='dataset')
     parser.add_argument('--model', default='resnet50', help='model')
     parser.add_argument('-b', '--batch_size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
@@ -175,7 +181,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr_steps', default=[16, 22], nargs='+', type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr_gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')
     parser.add_argument('--print_freq', default=20, type=int, help='print frequency')
-    parser.add_argument('--output_dir', default='./', help='path where to save')
+    parser.add_argument('--output_dir', default='./models', help='path where to save')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
     parser.add_argument('--num_classes', default=2, type=int, help='Number of classes.')
     parser.add_argument(
@@ -193,6 +199,6 @@ if __name__ == '__main__':
                       momentum=args.momentum, weight_decay=args.weight_decay, lr_step_size=args.lr_step_size,
                       lr_steps=args.lr_steps, lr_gamma=args.lr_gamma, print_freq=args.print_freq,
                       output_dir=args.output_dir, start_epoch=args.start_epoch,
-                      is_pretrained=args.pretrained)
+                      is_pretrained=True)
 
     o_train.main()

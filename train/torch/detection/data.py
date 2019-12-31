@@ -61,6 +61,7 @@ class PedData(Dataset):
         # there is only one class
         labels = torch.ones((num_objs,), dtype=torch.int64)
         image_id = torch.tensor([idx])
+        area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
         # suppose all instances are not crowd
         iscrowd = torch.zeros((num_objs,), dtype=torch.int64)
 
@@ -69,6 +70,7 @@ class PedData(Dataset):
         target["labels"] = labels
         target["image_id"] = image_id
         target["iscrowd"] = iscrowd
+        target["area"] = area
 
         if self.transforms is not None:
             img, target = self.transforms(img, target)
