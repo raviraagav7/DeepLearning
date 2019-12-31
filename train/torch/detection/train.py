@@ -5,18 +5,28 @@ import sys
 import torch
 import torch.utils.data
 import argparse
-sys.path.append('.')
-from utils.engine import train_one_epoch, evaluate
-import utils.transforms as T
-import utils.utils as utils
-from data import PedData
+from PIL import Image
 import torchvision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection import FasterRCNN
 from torchvision.models.detection.rpn import AnchorGenerator
 import ssl
+import matplotlib.pyplot as plt
+import numpy as np
+from torchvision import transforms
+import random
+import matplotlib.patches as patches
+
+sys.path.append('.')
+from utils.engine import train_one_epoch, evaluate
+import utils.transforms as T
+import utils.utils as utils
+# from data import PedData
+from data_loader import SOW2Dataset
+
 if not os.environ.get('PYTHONHTTPSVERIFY', '') and getattr(ssl, '_create_unverified_context', None):
     ssl._create_default_https_context = ssl._create_unverified_context
+
 
 class Trainer:
 
@@ -41,6 +51,7 @@ class Trainer:
         self.start_epoch = start_epoch
         self.is_pretrained = is_pretrained
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.model = None
         print(self.is_pretrained)
         self.num_classes = num_classes
         if self.output_dir:
@@ -56,11 +67,11 @@ class Trainer:
     def __get_model(self):
         if self.model_architecture == 'resnet50':
             # load a model pre-trained pre-trained on COCO
-            model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=self.is_pretrained)
+            self.model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=self.is_pretrained)
             # get number of input features for the classifier
-            in_features = model.roi_heads.box_predictor.cls_score.in_features
+            in_features = self.model.roi_heads.box_predictor.cls_score.in_features
             # replace the pre-trained head with a new one
-            model.roi_heads.box_predictor = FastRCNNPredictor(in_features, self.num_classes)
+            self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, self.num_classes)
 
         elif self.model_architecture == 'mobilenet':
             # load a pre-trained model for classification and return only the features
@@ -90,20 +101,65 @@ class Trainer:
                                                             sampling_ratio=2)
 
             # put the pieces together inside a FasterRCNN model
-            model = FasterRCNN(backbone,
-                               num_classes=self.num_classes,
-                               rpn_anchor_generator=anchor_generator,
-                               box_roi_pool=roi_pooler)
-        return model
+            self.model = FasterRCNN(backbone,
+                                    num_classes=self.num_classes,
+                                    rpn_anchor_generator=anchor_generator,
+                                    box_roi_pool=roi_pooler)
+
+    @torch.no_grad()
+    def predict(self, image_path):
+        weights_file_path = os.listdir(self.output_dir)
+        self.__get_model()
+        self.model.to(self.device)
+        checkpoint = torch.load(os.path.join(self.output_dir, weights_file_path[-1]), map_location='cpu')
+        self.model.load_state_dict(checkpoint['model'])
+
+        self.model.eval()
+
+        img = Image.open(image_path).convert("RGB")
+        transform = transforms.Compose([transforms.ToTensor()])
+        transformed_img = transform(img)
+
+        # transformed_img = transformed_img.to(self.device)
+        outputs = self.model([transformed_img])
+        cpu_device = torch.device("cpu")
+        outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
+        print(outputs)
+
+        # Get bounding-box colors
+        cmap = plt.get_cmap('tab20b')
+        colors = [cmap(i) for i in np.linspace(0, 1, 20)]
+
+        img = np.array(img)
+        plt.figure()
+        fig, ax = plt.subplots(1, figsize=(12, 9))
+        ax.imshow(img)
+
+        if outputs is not None:
+            unique_labels = outputs[0]['labels'].unique()
+            n_cls_pred = len(unique_labels)
+            bbox_colors = random.sample(colors, n_cls_pred)
+            for bbox, cls_pred, conf in zip(outputs[0]['boxes'], outputs[0]['labels'], outputs[0]['scores']):
+                color = bbox_colors[int(np.where(unique_labels == int(cls_pred))[0])]
+                box = patches.Rectangle((bbox[0], bbox[1]), (bbox[2] - bbox[0]), (bbox[3] - bbox[1]),
+                                        linewidth=2, edgecolor=color, facecolor='none')
+                ax.add_patch(box)
+                plt.text(bbox[0], bbox[1], s='pedestrian',
+                         color='white', verticalalignment='top',
+                         bbox={'color': color, 'pad': 0})
+        plt.axis('off')
+        plt.show()
+        self.model.train()
 
     def main(self):
-
         # Data loading code
         print("Loading data")
 
         # use our dataset and defined transformations
-        dataset = PedData(self.data_dir, self.__get_transform(train=True))
-        dataset_test = PedData(self.data_dir, self.__get_transform(train=False))
+        # dataset = PedData(self.data_dir, self.__get_transform(train=True))
+        dataset = SOW2Dataset('Underwater Project', False, self.data_dir, self.__get_transform(train=True))
+        # dataset_test = PedData(self.data_dir, self.__get_transform(train=False))
+        dataset_test = SOW2Dataset('Underwater Project', False, self.data_dir, self.__get_transform(train=False))
 
         # split the dataset in train and test set
         indices = torch.randperm(len(dataset)).tolist()
@@ -127,11 +183,11 @@ class Trainer:
             collate_fn=utils.collate_fn)
 
         print("Creating model")
-        model = self.__get_model()
-        model.to(self.device)
+        self.__get_model()
+        self.model.to(self.device)
 
         # construct an optimizer
-        params = [p for p in model.parameters() if p.requires_grad]
+        params = [p for p in self.model.parameters() if p.requires_grad]
 
         optimizer = torch.optim.SGD(
             params, lr=self.learning_rate, momentum=self.momentum, weight_decay=self.weight_decay)
@@ -141,19 +197,19 @@ class Trainer:
         print("Start training")
         start_time = time.time()
         for epoch in range(self.start_epoch, self.epochs):
-            train_one_epoch(model, optimizer, data_loader, self.device, epoch, args.print_freq)
+            train_one_epoch(self.model, optimizer, data_loader, self.device, epoch, args.print_freq)
 
             lr_scheduler.step()
             if self.output_dir and epoch == self.epochs-1:
                 utils.save_on_master({
-                    'model': model.state_dict(),
+                    'model': self.model.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'lr_scheduler': lr_scheduler.state_dict(),
                     'args': self,
                     'epoch': epoch},
-                    os.path.join(self.output_dir, 'model_{}.pth'.format(epoch)))
+                    os.path.join(self.output_dir, 'model_{}_{}.pth'.format(epoch, self.model_architecture)))
             # evaluate after every epoch
-            evaluate(model, data_loader_test, device=self.device)
+            evaluate(self.model, data_loader_test, device=self.device)
             total_time = time.time() - start_time
             total_time_str = str(datetime.timedelta(seconds=int(total_time)))
             print('Training time {}'.format(total_time_str))
@@ -163,7 +219,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Train a detector network.')
 
-    parser.add_argument('--data_path', default='/home/ravi/Downloads/PennFudanPed', help='dataset')
+    parser.add_argument('--data_path', default='/Users/srinivasraviraagav/Kespry-Dataset/sow-2-data/batch-1', help='dataset')
     parser.add_argument('--model', default='resnet50', help='model')
     parser.add_argument('-b', '--batch_size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
@@ -181,7 +237,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr_steps', default=[16, 22], nargs='+', type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr_gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')
     parser.add_argument('--print_freq', default=20, type=int, help='print frequency')
-    parser.add_argument('--output_dir', default='./models', help='path where to save')
+    parser.add_argument('--output_dir', default='./models-sow2', help='path where to save')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
     parser.add_argument('--num_classes', default=2, type=int, help='Number of classes.')
     parser.add_argument(
@@ -202,3 +258,4 @@ if __name__ == '__main__':
                       is_pretrained=True)
 
     o_train.main()
+    # o_train.predict(image_path='/Users/srinivasraviraagav/Downloads/PennFudanPed/PNGImages/PennPed00062.png')
