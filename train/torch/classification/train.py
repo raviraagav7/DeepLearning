@@ -14,6 +14,7 @@ import argparse
 from tqdm import tqdm
 from enum import Enum
 from azureml.core import Run
+
 plt.ion()
 run = Run.get_context()
 
@@ -131,7 +132,7 @@ class Trainer:
 
         self.exp_lr_scheduler = lr_scheduler.StepLR(self.optimizer, step_size=7, gamma=0.1)
 
-    def train_model(self):
+    def main(self):
         """
             To do
         """
@@ -293,6 +294,6 @@ if __name__ == '__main__':
     # out = torchvision.utils.make_grid(inputs)
     # o_train.im_show(out, title=[o_train.class_names[x] for x in classes])
 
-    o_train.train_model()
+    o_train.main()
     # o_train.visualize_model()
 
