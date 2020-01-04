@@ -10,7 +10,9 @@ import json
 import ssl
 import glob
 import argparse
+import random
 sys.path.append('.')
+from data_aug.data_aug import *
 import utils.transforms as T
 from settings import LABELBOX_API_KEY
 
@@ -28,10 +30,10 @@ def get_transform(train):
 
 class SOW2Dataset(Dataset):
 
-    def __init__(self, project_name, url_image, image_dir, transforms):
+    def __init__(self, project_name, image_dir, transforms, mode='train'):
         self.client = Client()
+        self.mode = mode
         self.project_name = project_name
-        self.url_image = url_image
         self.image_dir = image_dir
         self.transforms = transforms
         self.label_dict = None
@@ -39,9 +41,10 @@ class SOW2Dataset(Dataset):
         self.unique_label = set()
         self.parse_json()
         self.unique_labels()
-        self.classes = list(set([i.split(' ')[0] for i in self.unique_label]))
-        if not self.url_image and self.image_dir:
-            self.load_folder_images()
+        self.classes = sorted(list(set([i.split(' ')[0] for i in self.unique_label])))
+        # self.classes = ['Anode', 'Debris', 'Boulder']
+        self.load_folder_images()
+
 
     def export_labels(self):
         """
@@ -76,11 +79,14 @@ class SOW2Dataset(Dataset):
             None
 
         """
-        self.export_labels()
-        with open('./labels.json', 'r') as f_read:
+        if not os.path.isfile(os.path.join(os.path.dirname(__file__), 'labels.json')):
+            self.export_labels()
+        with open(os.path.join(os.path.dirname(__file__), 'labels.json'), 'r') as f_read:
             self.label_dict = json.load(f_read)
 
         self.label_dict = list(filter(lambda i: i['Label'] != 'Skip', self.label_dict))
+        self.label_dict = list(filter(lambda i: type(i['Label']) is not str, self.label_dict))
+        self.label_dict = list(filter(lambda i: len(i['Label']) is not 0, self.label_dict))
 
     def load_folder_images(self):
         """
@@ -91,12 +97,8 @@ class SOW2Dataset(Dataset):
             None
 
         """
-        list_dir = os.listdir(self.image_dir)
-        for directory in list_dir:
-            if directory is '.DS_Store' or (not os.path.isdir(os.path.join(self.image_dir, directory))):
-                continue
-            for file_path in glob.glob(os.path.join(self.image_dir, directory, '*.jpg')):
-                self.image_dict[file_path.split('/')[-1]] = file_path
+        for file_path in glob.glob(os.path.join(self.image_dir, '*.jpg')):
+            self.image_dict[file_path.split('/')[-1]] = file_path
 
     def unique_labels(self):
         """
@@ -115,24 +117,52 @@ class SOW2Dataset(Dataset):
 
     def __getitem__(self, idx):
 
-        url = self.label_dict[idx]['Labeled Data']
-        image_name = '.'.join([url.split('/')[-1].split('.')[0], 'jpg'])
-        img = Image.open(self.image_dict[image_name]).convert("RGB")
+        image_name = list(self.image_dict.keys())[idx]
+        image_path = self.image_dict[image_name]
+        label_data = list(filter(lambda i: image_name in i['Labeled Data'], self.label_dict))[0]
+        img = Image.open(image_path).convert("RGB")
 
-        obj_ids = self.label_dict[idx]['Label'].keys()
+        obj_ids = label_data['Label'].keys()
 
-        boxes = []
-        labels = []
+        bboxes = []
+        # boxes = []
+        # labels = []
         for id in obj_ids:
-            for box in self.label_dict[idx]['Label'][id]:
-                boxes.append([box['geometry'][0]['x'], box['geometry'][0]['y'],
-                              box['geometry'][2]['x'], box['geometry'][2]['y']])
-                labels.append(self.classes.index(id.split(' ')[0]))
+            for box in label_data['Label'][id]:
+                if box['geometry'][0]['x'] < box['geometry'][2]['x']:
+                    x_min = box['geometry'][0]['x']
+                    x_max = box['geometry'][2]['x']
+                else:
+                    x_min = box['geometry'][2]['x']
+                    x_max = box['geometry'][0]['x']
+
+                if box['geometry'][0]['y'] < box['geometry'][2]['y']:
+                    y_min = box['geometry'][0]['y']
+                    y_max = box['geometry'][2]['y']
+                else:
+                    y_min = box['geometry'][2]['y']
+                    y_max = box['geometry'][0]['y']
+                bboxes.append([x_min, y_min, x_max, y_max, self.classes.index(id.split(' ')[0]) + 1])
+                # boxes.append([x_min, y_min, x_max, y_max])
+                # labels.append(self.classes.index(id.split(' ')[0]) + 1)
+        bboxes = np.asarray(bboxes, dtype=np.float32)
+        if self.mode == 'train':
+            img = np.asarray(img)
+            img, bboxes = RandomHorizontalFlip(1)(img, bboxes)
+            # print(bboxes)
+            img = Image.fromarray(img)
+
+        boxes = bboxes[:, :4]
+        labels = bboxes[:, -1]
+
         # convert everything into a torch.Tensor
         boxes = torch.as_tensor(boxes, dtype=torch.float32)
         labels = torch.as_tensor(labels, dtype=torch.int64)
         image_id = torch.tensor([idx])
-        area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
+        try:
+            area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
+        except Exception:
+            print("error")
         # suppose all instances are not crowd
         is_crowd = torch.zeros((len(labels),), dtype=torch.int64)
 
@@ -149,21 +179,17 @@ class SOW2Dataset(Dataset):
         return img, target
 
     def __len__(self):
-        return len(self.label_dict)
+        return len(self.image_dict)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Visualize the LabelBox labels.')
     parser.add_argument('-p', '--project_name', nargs='?', type=str, default='Underwater Project',
                         help='Project Name in LabelBox for downloading the labels')
-    parser.add_argument('-u', '--url_image', action='store_true',
-                        help='Whether to download from the specified url (-u)')
     parser.add_argument('-d', '--image_dir', nargs='?', type=str,
-                        default='/Users/srinivasraviraagav/Kespry-Dataset/sow-2-data/batch-1',
+                        default='/home/ravi/dataset/batch-1/train',
                         help='Required if the url_image (-u) argument is not used.')
 
     args = parser.parse_args()
-    if not args.url_image and args.image_dir is None:
-        raise Exception('Please provide the path to the Image Directory.')
-    dataset = SOW2Dataset(args.project_name, args.url_image, args.image_dir, get_transform(train=True))
+    dataset = SOW2Dataset(args.project_name, args.image_dir, get_transform(train=True), mode='test')
     dataset[0]
