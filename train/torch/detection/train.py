@@ -53,7 +53,7 @@ class Trainer:
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.model = None
         print(self.is_pretrained)
-        self.num_classes = num_classes
+        self.num_classes = num_classes + 1 # num_classes + Background
         if self.output_dir:
             utils.mkdir(self.output_dir)
 
@@ -107,19 +107,19 @@ class Trainer:
                                     box_roi_pool=roi_pooler)
 
     @torch.no_grad()
-    def predict(self, image_path):
+    def predict(self, image_path, classes, conf_thresh=0.5):
         weights_file_path = os.listdir(self.output_dir)
         self.__get_model()
         self.model.to(self.device)
         checkpoint = torch.load(os.path.join(self.output_dir, weights_file_path[-1]), map_location='cpu')
-        self.model.load_state_dict(checkpoint['model'])
+        self.model.load_state_dict(checkpoint)
 
         self.model.eval()
 
         img = Image.open(image_path).convert("RGB")
         transform = transforms.Compose([transforms.ToTensor()])
         transformed_img = transform(img)
-
+        transformed_img = transformed_img.to(self.device)
         # transformed_img = transformed_img.to(self.device)
         outputs = self.model([transformed_img])
         cpu_device = torch.device("cpu")
@@ -131,7 +131,6 @@ class Trainer:
         colors = [cmap(i) for i in np.linspace(0, 1, 20)]
 
         img = np.array(img)
-        plt.figure()
         fig, ax = plt.subplots(1, figsize=(12, 9))
         ax.imshow(img)
 
@@ -140,13 +139,14 @@ class Trainer:
             n_cls_pred = len(unique_labels)
             bbox_colors = random.sample(colors, n_cls_pred)
             for bbox, cls_pred, conf in zip(outputs[0]['boxes'], outputs[0]['labels'], outputs[0]['scores']):
-                color = bbox_colors[int(np.where(unique_labels == int(cls_pred))[0])]
-                box = patches.Rectangle((bbox[0], bbox[1]), (bbox[2] - bbox[0]), (bbox[3] - bbox[1]),
-                                        linewidth=2, edgecolor=color, facecolor='none')
-                ax.add_patch(box)
-                plt.text(bbox[0], bbox[1], s='pedestrian',
-                         color='white', verticalalignment='top',
-                         bbox={'color': color, 'pad': 0})
+                if conf > conf_thresh:
+                    color = bbox_colors[int(np.where(unique_labels == int(cls_pred))[0])]
+                    box = patches.Rectangle((bbox[0], bbox[1]), (bbox[2] - bbox[0]), (bbox[3] - bbox[1]),
+                                            linewidth=2, edgecolor=color, facecolor='none')
+                    ax.add_patch(box)
+                    plt.text(bbox[0], bbox[1], s='{} : {:.2f}'.format(classes[cls_pred], conf),
+                             color='white', verticalalignment='top',
+                             bbox={'color': color, 'pad': 0})
         plt.axis('off')
         plt.show()
         self.model.train()
@@ -157,14 +157,18 @@ class Trainer:
 
         # use our dataset and defined transformations
         # dataset = PedData(self.data_dir, self.__get_transform(train=True))
-        dataset = SOW2Dataset('Underwater Project', False, self.data_dir, self.__get_transform(train=True))
+        dataset = SOW2Dataset('Underwater Project', os.path.join(self.data_dir, 'train'),
+                              self.__get_transform(train=True), mode='train')
         # dataset_test = PedData(self.data_dir, self.__get_transform(train=False))
-        dataset_test = SOW2Dataset('Underwater Project', False, self.data_dir, self.__get_transform(train=False))
+        dataset_test = SOW2Dataset('Underwater Project', os.path.join(self.data_dir, 'test'),
+                                   self.__get_transform(train=False), mode='test')
 
-        # split the dataset in train and test set
-        indices = torch.randperm(len(dataset)).tolist()
-        dataset = torch.utils.data.Subset(dataset, indices[:-50])
-        dataset_test = torch.utils.data.Subset(dataset_test, indices[-50:])
+        print(len(dataset))
+
+        # # split the dataset in train and test set
+        # indices = torch.randperm(len(dataset)).tolist()
+        # dataset = torch.utils.data.Subset(dataset, indices[:-50])
+        # dataset_test = torch.utils.data.Subset(dataset_test, indices[-50:])
 
         print("Creating data loaders")
         train_sampler = torch.utils.data.RandomSampler(dataset)
@@ -201,13 +205,8 @@ class Trainer:
 
             lr_scheduler.step()
             if self.output_dir and epoch == self.epochs-1:
-                utils.save_on_master({
-                    'model': self.model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'args': self,
-                    'epoch': epoch},
-                    os.path.join(self.output_dir, 'model_{}_{}.pth'.format(epoch, self.model_architecture)))
+                torch.save(self.model.state_dict(),
+                           os.path.join(self.output_dir, 'model_{}_{}.pth'.format(epoch, self.model_architecture)))
             # evaluate after every epoch
             evaluate(self.model, data_loader_test, device=self.device)
             total_time = time.time() - start_time
@@ -219,13 +218,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Train a detector network.')
 
-    parser.add_argument('--data_path', default='/Users/srinivasraviraagav/Kespry-Dataset/sow-2-data/batch-1', help='dataset')
+    parser.add_argument('--data_path', default='/home/ravi/dataset/batch-1', help='dataset')
     parser.add_argument('--model', default='resnet50', help='model')
     parser.add_argument('-b', '--batch_size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('--epochs', default=26, type=int, metavar='N',
                         help='number of total epochs to run')
-    parser.add_argument('--lr', default=0.02, type=float,
+    parser.add_argument('--lr', default=0.002, type=float,
                         help='initial learning rate, 0.02 is the default value for training '
                              'on 8 gpus and 2 images_per_gpu')
     parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
@@ -239,7 +238,7 @@ if __name__ == '__main__':
     parser.add_argument('--print_freq', default=20, type=int, help='print frequency')
     parser.add_argument('--output_dir', default='./models-sow2', help='path where to save')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
-    parser.add_argument('--num_classes', default=2, type=int, help='Number of classes.')
+    parser.add_argument('--num_classes', default=3, type=int, help='Number of classes.')
     parser.add_argument(
         "--pretrained",
         dest="pretrained",
@@ -257,5 +256,7 @@ if __name__ == '__main__':
                       output_dir=args.output_dir, start_epoch=args.start_epoch,
                       is_pretrained=True)
 
-    o_train.main()
-    # o_train.predict(image_path='/Users/srinivasraviraagav/Downloads/PennFudanPed/PNGImages/PennPed00062.png')
+    # o_train.main()
+
+    o_train.predict(image_path='/home/ravi/dataset/batch-1/test/N0302_1_Starboard_image_D2018-09-13T22-21-13-911510Z_2_Starboard_0007_Anode.jpg',
+                    classes=['Background', 'Anode', 'Boulder', 'Debris'])
