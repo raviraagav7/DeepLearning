@@ -2,11 +2,11 @@ import os
 import torch
 import segmentation_models_pytorch as smp
 from torch.utils.data import DataLoader
+from dataloader import Dataset
+from utils import get_training_augmentation, get_validation_augmentation, get_preprocessing
+import argparse
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
-from train.torch.segmentation.dataloader import Dataset
-from train.torch.segmentation.utils import get_training_augmentation, get_validation_augmentation, get_preprocessing
-import argparse
 
 
 class SegmentationNet:
@@ -32,6 +32,7 @@ class SegmentationNet:
         self.DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         self.model = None
+        self.loss = None
         self.preprocessing_fn = None
         self.metrics = None
         self.optimizer = None
@@ -52,7 +53,7 @@ class SegmentationNet:
         # Dice/F1 score - https://en.wikipedia.org/wiki/S%C3%B8rensen%E2%80%93Dice_coefficient
         # IoU/Jaccard score - https://en.wikipedia.org/wiki/Jaccard_index
 
-        loss = smp.utils.losses.DiceLoss()
+        self.loss = smp.utils.losses.DiceLoss()
         self.metrics = [
             smp.utils.metrics.IoU(threshold=0.5),
         ]
@@ -125,17 +126,17 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train a segmentation Model')
 
     parser.add_argument('--data_dir', type=str,
-                        default='./WireframeData',
+                        default='/media/ravi/BE1CC30A1CC2BCA1/Ravi/kespry/WireframeData',
                         help='Path to the data directory')
 
     parser.add_argument('--learning_rate', required=False,
-                        type=float, default=0.001, help='Learning Rate.')
+                        type=float, default=0.0001, help='Learning Rate.')
 
     parser.add_argument('--epochs', required=False,
-                        type=int, default=35, help='Number of epochs.')
+                        type=int, default=40, help='Number of epochs.')
 
     parser.add_argument('--batch_size', required=False, type=int,
-                        default=4, help='Batch Size.')
+                        default=2, help='Batch Size.')
 
     parser.add_argument('--classes', required=False, type=list,
                         default=['wireframe'], help='List of Classes.')

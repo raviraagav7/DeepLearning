@@ -1,0 +1,17 @@
+albumentations==0.4.5
+imageio==2.8.0
+imgaug==0.2.6
+kiwisolver==1.1.0
+MarkupSafe==1.1.1
+matplotlib==3.2.1
+numpy==1.18.2
+opencv-python-headless==4.2.0.32
+Pillow==7.0.0
+scikit-image==0.16.2
+scikit-learn==0.22.2.post1
+scipy==1.4.1
+segmentation-models-pytorch==0.1.0
+sklearn==0.0
+torch==1.4.0
+torchvision==0.5.0
+tqdm==4.43.0
