@@ -12,7 +12,7 @@ from azureml.train.hyperdrive import GridParameterSampling, choice, uniform, Ran
 from azureml.train.hyperdrive import BanditPolicy
 
 
-def upload_data2azure(ds, src_dir, target_dir='data'):
+def upload_data2azure(ds, src_dir, target_dir='data_sow_class_v2'):
     """
         This function uploads the data from the source directory(src_dir) to
         Azure Data storage under the target directory.
@@ -32,7 +32,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--src_dir',
                         help='Directory where the Training and Validation Image Folders are present.',
-                        required=True)
+                        required=False,
+                        default='/Users/srinivasraviraagav/Kespry-Code/convertLabel2Pipeline/SOW2_Data_v2')
 
     parser.add_argument('-g', '--grid',
                         help='Grid Parameter Sampling for hyper parameter range',
@@ -41,18 +42,18 @@ if __name__ == '__main__':
     parser.add_argument('--compute_name',
                         help='Name of the compute target',
                         required=False,
-                        default='ml-compute')
+                        default='ml-compute-high')
 
     parser.add_argument(
         '--output_dir',
-        default='./outputs/model',
+        default='./outputs',
         type=str,
         help='The directory where the model weights will be stored')
 
     parser.add_argument(
         '--learning_rate',
         type=float,
-        default=1.e-4,
+        default=1.e-3,
         help='Learning rate.'
     )
 
@@ -66,7 +67,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--epochs',
         type=int,
-        default=10,
+        default=50,
         help='Number of epochs.'
     )
 
@@ -83,7 +84,7 @@ if __name__ == '__main__':
                         required=False, default="STANDARD_NC6S_V2")
     parser.add_argument('--vm_priority',
                         help='Priority of instance either dedicated or lowpriority. Defaults to lowpriority',
-                        required=False, default='lowpriority')
+                        required=False, default='normalpriority')
     parser.add_argument('--max_nodes',
                         help='Max number of nodes in the cluster. Defaults to 4',
                         required=False, default=4, type=int)
@@ -98,12 +99,12 @@ if __name__ == '__main__':
 
     ds = ws.get_default_datastore()
 
-    # upload_data2azure(ds, args.src_dir)
+    upload_data2azure(ds, args.src_dir)
 
     experiment = Experiment(workspace=ws, name='train_torch_classifier')
 
     script_params = {
-        '--data_dir': ds.path('data').as_mount(),
+        '--data_dir': ds.path('data_sow_class_v2').as_mount(),
         '--output_dir': args.output_dir,
         '--batch_size': 32,
         '--model_architecture': 'mobile_net',
@@ -125,10 +126,9 @@ if __name__ == '__main__':
     # Hyper parameter tuning
 
     hyper_parameter_ranges = {
-        '--learning_rate': uniform(1e-5, 1e-4),
-        '--momentum': uniform(0.9, 0.99),
-        '--model_architecture': choice('wide_res_net_50', 'mobile_net', 'vgg_19', 'res_next'),
-        '--batch_size': choice(10, 14, 18, 24, 32)
+        '--learning_rate': uniform(1e-4, 2e-3),
+        '--model_architecture': choice('wide_res_net_50', 'mobile_net', 'vgg_19', 'res_next', 'res_net101'),
+        '--batch_size': choice(4, 8, 16)
     }
 
     if args.grid:
@@ -145,8 +145,10 @@ if __name__ == '__main__':
                                               policy=early_termination_policy,
                                               primary_metric_name='val_acc',
                                               primary_metric_goal=PrimaryMetricGoal.MAXIMIZE,
-                                              max_total_runs=2,
+                                              max_total_runs=30,
                                               max_concurrent_runs=4)
 
     run = experiment.submit(hyper_drive_run_config)
     run.wait_for_completion(show_output=True)
+    # run = experiment.submit(estimator)
+    # run.wait_for_completion(show_output=True)

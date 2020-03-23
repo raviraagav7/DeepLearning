@@ -131,4 +131,6 @@ dmypy.json
 *.pth
 model_weights/*.pth
 
+
+train/torch/classification/runs/*
 .DS_Store

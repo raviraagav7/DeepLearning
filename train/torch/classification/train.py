@@ -14,6 +14,11 @@ import argparse
 from tqdm import tqdm
 from enum import Enum
 from azureml.core import Run
+from torchsampler import ImbalancedDatasetSampler
+from collections import Counter
+import ssl
+if not os.environ.get('PYTHONHTTPSVERIFY', '') and getattr(ssl, '_create_unverified_context', None):
+    ssl._create_default_https_context = ssl._create_unverified_context
 
 plt.ion()
 run = Run.get_context()
@@ -24,16 +29,16 @@ class ModelArchitecture(Enum):
     MOBILE_NET_V2 = 'mobile_net'
     VGG_19 = 'vgg_19'
     RES_NEXT = 'res_next'
+    RES_NET = 'res_net101'
 
     @classmethod
     def has_value(cls, value):
         return value in cls._value2member_map_
 
-
 class Trainer:
 
     def __init__(self, data_dir, batch_size, model_architecture, learning_rate,
-                 epochs, momentum, is_pretrained, output_dir, experiment='Ant_and_Bees'):
+                 epochs, momentum, is_pretrained, output_dir, experiment='SOW_Incident'):
         """
             To do
         """
@@ -53,32 +58,47 @@ class Trainer:
         self.data_transforms = {'train': transforms.Compose([
             transforms.RandomResizedCrop(224),
             transforms.RandomHorizontalFlip(),
+            transforms.RandomVerticalFlip(),
+            transforms.ColorJitter(contrast=0.5),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            transforms.Normalize([0.272, 0.279, 0.311], [0.084, 0.101, 0.110])
         ]),
             'val': transforms.Compose([
-                transforms.Resize(256),
+                transforms.Resize(224),
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+                transforms.Normalize([0.272, 0.279, 0.311], [0.084, 0.101, 0.110])
             ]), }
 
         self.image_data = {x: datasets.ImageFolder(os.path.join(data_dir, x), self.data_transforms[x])
                            for x in ['train', 'val']}
 
-        self.data_loader = {x: torch.utils.data.DataLoader(self.image_data[x], batch_size=self.batch_size,
-                                                           shuffle=True, num_workers=4) for x in ['train', 'val']}
+        self.weights = self.calc_class_weights(self.image_data['train'].targets)
+
+        self.data_loader = {'train': torch.utils.data.DataLoader(self.image_data['train'], batch_size=self.batch_size,
+                                                                 sampler=ImbalancedDatasetSampler(
+                                                                     self.image_data['train']), num_workers=4),
+                            'val': torch.utils.data.DataLoader(self.image_data['val'], batch_size=self.batch_size,
+                                                               shuffle=False, num_workers=4)}
 
         self.data_sizes = {x: len(self.image_data[x]) for x in ['train', 'val']}
 
         self.class_names = self.image_data['train'].classes
 
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.weights = self.weights.to(self.device)
+
         self.__build_model()
 
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
             print('Created Folder.')
+
+    @staticmethod
+    def calc_class_weights(labels):
+        class_count = list(Counter(labels).values())
+        class_weight = list(map(lambda x: min(class_count)/x, class_count))
+        return torch.tensor(class_weight)
 
     @staticmethod
     def im_show(inp, title=None):
@@ -122,17 +142,24 @@ class Trainer:
             self.model = models.mobilenet_v2(pretrained=self.is_pretrained)
             num_features = self.model.classifier[1].in_features
             self.model.classifier[1] = nn.Linear(num_features, len(self.class_names))
+        elif self.model_architecture == ModelArchitecture.RES_NET.value:
+            self.model = models.resnet101(pretrained=self.is_pretrained)
+            num_features = self.model.fc.in_features
+            self.model.fc = nn.Linear(num_features, len(self.class_names))
 
         self.model = self.model.to(self.device)
 
         # self.criterion = nn.BCEWithLogitsLoss() if len(self.class_names) == 2 else nn.CrossEntropyLoss()
+        #self.criterion = nn.CrossEntropyLoss(weight=self.weights)
+
         self.criterion = nn.CrossEntropyLoss()
 
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.learning_rate, momentum=self.momentum)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=self.learning_rate, momentum=self.momentum,
+                                   weight_decay=0.001)
 
         self.exp_lr_scheduler = lr_scheduler.StepLR(self.optimizer, step_size=7, gamma=0.1)
 
-    def main(self):
+    def run(self):
         """
             To do
         """
@@ -209,6 +236,7 @@ class Trainer:
                                                                      'best_weights_{}_batch_{}_lr_{}.pth'.format(
                                                                          self.model_architecture,
                                                                          self.batch_size, self.learning_rate)))
+                    torch.save(self.model, os.path.join(self.output_dir, 'model.pth'))
                     print(os.listdir(self.output_dir))
 
         print()
@@ -258,7 +286,8 @@ class Trainer:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--data_dir', required=True, type=str,
+    parser.add_argument('--data_dir', required=False, type=str,
+                        default='/Users/srinivasraviraagav/Kespry-Dataset/SOW2_Data',
                         help='The directory where the Images are present.')
 
     parser.add_argument('--batch_size', required=False, type=int,
@@ -272,7 +301,7 @@ if __name__ == '__main__':
                         type=float, default=0.001, help='Learning Rate.')
 
     parser.add_argument('--epochs', required=False,
-                        type=int, default=25, help='Number of epochs.')
+                        type=int, default=35, help='Number of epochs.')
 
     parser.add_argument('--momentum', required=False,
                         type=float, default=0.9, help='Momentum.')
@@ -294,6 +323,6 @@ if __name__ == '__main__':
     # out = torchvision.utils.make_grid(inputs)
     # o_train.im_show(out, title=[o_train.class_names[x] for x in classes])
 
-    o_train.main()
+    o_train.run()
     # o_train.visualize_model()
 
