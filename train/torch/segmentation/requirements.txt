@@ -6,7 +6,7 @@ MarkupSafe==1.1.1
 matplotlib==3.2.1
 numpy==1.18.2
 opencv-python-headless==4.2.0.32
-Pillow==7.0.0
+Pillow==9.0.0
 scikit-image==0.16.2
 scikit-learn==0.22.2.post1
 scipy==1.4.1
