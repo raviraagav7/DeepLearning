@@ -28,7 +28,7 @@ termcolor==1.1.0
 torch==1.3.1
 torchvision==0.4.2
 tqdm==4.41.0
-Werkzeug==0.16.0
+Werkzeug==2.2.3
 wrapt==1.11.2
 azureml-sdk[tensorboard,automl]
 azureml==0.2.7
